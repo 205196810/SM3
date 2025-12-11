@@ -1,0 +1,402 @@
+#pragma once
+#ifndef SM3_H
+#define SM3_H
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <time.h>
+#include <assert.h>
+
+// SM3标准初始向量IV（8个32位寄存器A-H）
+#define SM3_IV_A 0x7380166f
+#define SM3_IV_B 0x4914b2b9
+#define SM3_IV_C 0x172442d7
+#define SM3_IV_D 0xda8a0600
+#define SM3_IV_E 0xa96f30bc
+#define SM3_IV_F 0x163138aa
+#define SM3_IV_G 0xe38dee4d
+#define SM3_IV_H 0xb0fb0e4e
+
+// 常量Tj（1-16轮：0x79cc4519；17-64轮：0x7a879d8a）
+#define T1 0x79cc4519
+#define T2 0x7a879d8a
+
+// 循环左移宏（n为移位位数）
+#define ROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+
+// 置换函数P0、P1（标准定义）
+#define P0(x) ((x) ^ ROTL(x, 9) ^ ROTL(x, 17))
+#define P1(x) ((x) ^ ROTL(x, 15) ^ ROTL(x, 23))
+
+// 布尔函数FF（1-16轮：XOR；17-64轮：AND+OR）
+#define FF1(X, Y, Z) ((X) ^ (Y) ^ (Z))
+#define FF2(X, Y, Z) (((X) & (Y)) | ((X) & (Z)) | ((Y) & (Z)))
+
+// 布尔函数GG（1-16轮：XOR；17-64轮：AND+NOT AND）
+#define GG1(X, Y, Z) ((X) ^ (Y) ^ (Z))
+#define GG2(X, Y, Z) (((X) & (Y)) | ((~(X)) & (Z)))
+
+// 函数声明
+// 1. 消息填充：input=原始数据，input_len=数据长度（字节），output=填充后数据，output_len=填充后长度（字节，出参）
+void sm3_pad(const uint8_t* input, size_t input_len, uint8_t** output, size_t* output_len);
+
+// 2. 分组扩展：group=512bit分组（64字节），W=68个32bit字输出，W1=64个32bit字输出
+void sm3_expand(const uint8_t* group, uint32_t* W, uint32_t* W1);
+
+// 3. 压缩函数：iv=8个32bit初始向量，group=512bit分组，更新后iv存入原地址
+void sm3_compress(uint32_t* iv, const uint8_t* group);
+
+// 4. 核心哈希计算：input=原始数据，input_len=字节数，hash=64字节十六进制哈希值（出参）
+void sm3_hash(const uint8_t* input, size_t input_len, char* hash);
+
+// 5. 文件哈希计算：file_path=文件路径，hash=64字节十六进制哈希值（出参），返回0成功，-1失败
+int sm3_hash_file(const char* file_path, char* hash);
+
+// 6. 辅助：打印哈希值（调试用）
+void sm3_print_hash(const char* hash);
+
+#endif // SM3_H
+#include "sm3.h"
+
+// 命令行参数解析：支持 -s 字符串输入 / -f 文件输入
+int main(int argc, char* argv[]) {
+    if (argc != 3) {
+        printf("用法：SM3_Implementation.exe -s <字符串>  或  SM3_Implementation.exe -f <文件路径>\n");
+        printf("示例1：SM3_Implementation.exe -s \"abc\"\n");
+        printf("示例2：SM3_Implementation.exe -f test.txt\n");
+        return -1;
+    }
+
+    char hash[65] = { 0 }; // 存储64位哈希值（含结束符）
+    clock_t start, end;
+    double cost_time;
+
+    // 处理字符串输入
+    if (strcmp(argv[1], "-s") == 0) {
+        const char* input_str = argv[2];
+        size_t str_len = strlen(input_str);
+
+        start = clock();
+        sm3_hash((const uint8_t*)input_str, str_len, hash);
+        end = clock();
+        cost_time = (double)(end - start) / CLOCKS_PER_SEC * 1000; // 毫秒
+
+        printf("输入字符串：%s\n", input_str);
+        sm3_print_hash(hash);
+        printf("计算耗时：%.3f 毫秒\n", cost_time);
+
+        // 标准用例验证提示
+        if (str_len == 0) {
+            printf("OpenSSL验证命令：echo -n \"\" | openssl dgst -sm3\n");
+            printf("预期结果：1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b\n");
+        }
+        else if (strcmp(input_str, "abc") == 0) {
+            printf("OpenSSL验证命令：echo -n \"abc\" | openssl dgst -sm3\n");
+            printf("预期结果：66c7f0f462eeedd9d1f2d46bdc10e4e24d8167c48b2860e270cf1a4427c52fcf8\n");
+        }
+    }
+    // 处理文件输入
+    else if (strcmp(argv[1], "-f") == 0) {
+        const char* file_path = argv[2];
+
+        start = clock();
+        int ret = sm3_hash_file(file_path, hash);
+        end = clock();
+        cost_time = (double)(end - start) / CLOCKS_PER_SEC * 1000;
+
+        if (ret == 0) {
+            printf("输入文件：%s\n", file_path);
+            sm3_print_hash(hash);
+            printf("计算耗时：%.3f 毫秒\n", cost_time);
+            printf("OpenSSL验证命令：openssl dgst -sm3 %s\n", file_path);
+        }
+        else {
+            printf("文件哈希计算失败！\n");
+            return -1;
+        }
+    }
+    // 无效参数
+    else {
+        printf("错误：无效参数！仅支持 -s（字符串）或 -f（文件）\n");
+        return -1;
+    }
+
+    return 0;
+}
+#include "sm3.h"
+
+// 1. 消息填充实现
+void sm3_pad(const uint8_t* input, size_t input_len, uint8_t** output, size_t* output_len) {
+    if (input == NULL || output == NULL || output_len == NULL) {
+        printf("错误：填充输入参数为空！\n");
+        return;
+    }
+
+    // 原始数据长度（bit）= 字节数 * 8
+    uint64_t input_bit_len = (uint64_t)input_len * 8;
+    // 填充规则：l+1+k ≡ 448 mod 512 → k = (448 - (l+1) mod 512) mod 512
+    size_t pad_0_len = (448 - (input_bit_len + 1) % 512) % 512;
+    // 填充后总长度（bit）= 原始长度 + 1（补1） + pad_0_len（补0） + 64（补长度）
+    *output_len = (input_bit_len + 1 + pad_0_len + 64) / 8;
+    // 分配填充后内存
+    *output = (uint8_t*)malloc(*output_len);
+    if (*output == NULL) {
+        printf("错误：填充内存分配失败！\n");
+        *output_len = 0;
+        return;
+    }
+
+    // 步骤1：复制原始数据（明确 *output_len ≥ input_len，消除缓冲区溢出警告）
+    memset(*output, 0, *output_len);
+    if (input_len > 0) {
+        // 断言：确保输出缓冲区大小 ≥ 原始数据长度（符合 SM3 填充规则）
+        assert(*output_len >= input_len);
+        // 使用 memcpy_s（VS 安全函数），显式指定目标缓冲区大小，消除警告
+        memcpy_s(*output, *output_len, input, input_len);
+    }
+    // 步骤2：补1（在原始数据末尾加0x80，即二进制10000000）
+    (*output)[input_len] = 0x80;
+
+    // 步骤3：补64bit原始长度（大端序，高位在前）
+    uint8_t* len_ptr = *output + *output_len - 8; // 最后8字节存长度
+    for (int i = 0; i < 8; i++) {
+        len_ptr[i] = (uint8_t)(input_bit_len >> (64 - 8 * (i + 1)));
+    }
+}
+
+// 2. 分组扩展实现（512bit分组→68字W + 64字W1）
+void sm3_expand(const uint8_t* group, uint32_t* W, uint32_t* W1) {
+    if (group == NULL || W == NULL || W1 == NULL) {
+        printf("错误：扩展输入参数为空！\n");
+        return;
+    }
+
+    // 步骤1：将512bit分组拆分为16个32bit字（W0-W15，大端序）
+    for (int i = 0; i < 16; i++) {
+        W[i] = (uint32_t)group[4 * i] << 24
+            | (uint32_t)group[4 * i + 1] << 16
+            | (uint32_t)group[4 * i + 2] << 8
+            | (uint32_t)group[4 * i + 3];
+    }
+
+    // 步骤2：生成W16-W67（共52个）
+    for (int j = 16; j < 68; j++) {
+        W[j] = P1(W[j - 16] ^ W[j - 9] ^ ROTL(W[j - 3], 15))
+            ^ ROTL(W[j - 13], 7)
+            ^ W[j - 6];
+    }
+
+    // 步骤3：生成W10-W163（共64个，W1[j] = W[j] ^ W[j+4]）
+    for (int j = 0; j < 64; j++) {
+        W1[j] = W[j] ^ W[j + 4];
+    }
+}
+
+// 3. 压缩函数实现（单分组压缩，更新IV）
+void sm3_compress(uint32_t* iv, const uint8_t* group) {
+    if (iv == NULL || group == NULL) {
+        printf("错误：压缩输入参数为空！\n");
+        return;
+    }
+
+    // 初始化A-H为当前IV
+    uint32_t A = iv[0], B = iv[1], C = iv[2], D = iv[3];
+    uint32_t E = iv[4], F = iv[5], G = iv[6], H = iv[7];
+    uint32_t W[68] = { 0 }, W1[64] = { 0 };
+
+    // 分组扩展
+    sm3_expand(group, W, W1);
+
+    // 64轮迭代
+    for (int j = 0; j < 64; j++) {
+        uint32_t SS1, SS2, TT1, TT2;
+        uint32_t Tj = (j < 16) ? T1 : T2; // 1-16轮用T1，17-64轮用T2
+
+        // 计算SS1、SS2
+        SS1 = ROTL((ROTL(A, 12) + E + ROTL(Tj, j)), 7);
+        SS2 = SS1 ^ ROTL(A, 12);
+
+        // 计算TT1、TT2（按轮次选择FF/GG函数）
+        if (j < 16) {
+            TT1 = FF1(A, B, C) + D + SS2 + W1[j];
+            TT2 = GG1(E, F, G) + H + SS1 + W[j];
+        }
+        else {
+            TT1 = FF2(A, B, C) + D + SS2 + W1[j];
+            TT2 = GG2(E, F, G) + H + SS1 + W[j];
+        }
+
+        // 更新寄存器（注意顺序：D=C, C=B<<9, B=A, A=TT1；H=G, G=F<<19, F=E, E=P0(TT2)）
+        D = C;
+        C = ROTL(B, 9);
+        B = A;
+        A = TT1;
+        H = G;
+        G = ROTL(F, 19);
+        F = E;
+        E = P0(TT2);
+    }
+
+    // 压缩结果与原IV异或，更新IV
+    iv[0] ^= A;
+    iv[1] ^= B;
+    iv[2] ^= C;
+    iv[3] ^= D;
+    iv[4] ^= E;
+    iv[5] ^= F;
+    iv[6] ^= G;
+    iv[7] ^= H;
+}
+
+// 4. 核心哈希计算（字节流→64位十六进制哈希）
+void sm3_hash(const uint8_t* input, size_t input_len, char* hash) {
+    if (input == NULL || hash == NULL) {
+        printf("错误：哈希计算参数为空！\n");
+        return;
+    }
+
+    // 步骤1：消息填充
+    uint8_t* padded_data = NULL;
+    size_t padded_len = 0;
+    sm3_pad(input, input_len, &padded_data, &padded_len);
+    if (padded_data == NULL || padded_len == 0) {
+        memset(hash, 0, 65);
+        return;
+    }
+
+    // 步骤2：初始化IV
+    uint32_t iv[8] = {
+        SM3_IV_A, SM3_IV_B, SM3_IV_C, SM3_IV_D,
+        SM3_IV_E, SM3_IV_F, SM3_IV_G, SM3_IV_H
+    };
+
+    // 步骤3：分512bit（64字节）分组压缩
+    size_t group_num = padded_len / 64; // 分组数量
+    for (size_t i = 0; i < group_num; i++) {
+        uint8_t* group = padded_data + i * 64;
+        sm3_compress(iv, group);
+    }
+
+    // 步骤4：IV→64位十六进制哈希（每个32bit寄存器→8位十六进制）
+    const char* hex_table = "0123456789abcdef";
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 4; j++) {
+            uint8_t byte = (iv[i] >> (24 - 8 * j)) & 0xff;
+            hash[i * 8 + 2 * j] = hex_table[byte >> 4];   // 高4位
+            hash[i * 8 + 2 * j + 1] = hex_table[byte & 0x0f]; // 低4位
+        }
+    }
+    hash[64] = '\0'; // 字符串结束符
+
+    // 释放填充内存
+    free(padded_data);
+}
+
+// 5. 文件哈希计算（分块读取大文件，避免内存溢出）
+int sm3_hash_file(const char* file_path, char* hash) {
+    if (file_path == NULL || hash == NULL) {
+        printf("错误：文件哈希参数为空！\n");
+        return -1;
+    }
+
+    // 打开文件（二进制模式）
+    FILE* fp = NULL;
+    // fopen_s 语法：err_t fopen_s(FILE** pFile, const char* filename, const char* mode);
+    errno_t err = fopen_s(&fp, file_path, "rb");
+    if (err != 0 || fp == NULL) { // 先判断函数返回值，再判断文件指针
+        printf("错误：文件%s打开失败！（错误码：%d）\n", file_path, err);
+        return -1;
+    }
+    // 初始化IV
+    uint32_t iv[8] = {
+        SM3_IV_A, SM3_IV_B, SM3_IV_C, SM3_IV_D,
+        SM3_IV_E, SM3_IV_F, SM3_IV_G, SM3_IV_H
+    };
+
+    // 分块读取（块大小=64KB，平衡效率与内存）
+    const size_t block_size = 64 * 1024;
+    uint8_t* block = (uint8_t*)malloc(block_size);
+    if (block == NULL) {
+        fclose(fp);
+        printf("错误：文件读取内存分配失败！\n");
+        return -1;
+    }
+
+    size_t read_len = 0;
+    uint64_t total_bit_len = 0; // 累计文件总长度（bit）
+    uint8_t partial_group[64] = { 0 }; // 存储不足64字节的部分分组
+    size_t partial_len = 0; // 部分分组的长度（字节）
+
+    // 步骤1：读取完整块并处理
+    while ((read_len = fread(block, 1, block_size, fp)) > 0) {
+        total_bit_len += (uint64_t)read_len * 8;
+        size_t current = 0;
+
+        // 若有部分分组未处理，先拼接
+        if (partial_len > 0) {
+            size_t copy_len = 64 - partial_len;
+            if (read_len >= copy_len) {
+                memcpy(partial_group + partial_len, block, copy_len);
+                sm3_compress(iv, partial_group); // 处理完整分组
+                partial_len = 0;
+                current = copy_len;
+            }
+            else {
+                memcpy(partial_group + partial_len, block, read_len);
+                partial_len += read_len;
+                current = read_len;
+            }
+        }
+
+        // 处理当前块中的完整分组
+        while (current + 64 <= read_len) {
+            sm3_compress(iv, block + current);
+            current += 64;
+        }
+
+        // 保存剩余部分到partial_group
+        if (current < read_len) {
+            memcpy(partial_group, block + current, read_len - current);
+            partial_len = read_len - current;
+        }
+    }
+
+    // 步骤2：处理剩余数据（填充）
+    uint8_t* padded_partial = NULL;
+    size_t padded_len = 0;
+    sm3_pad(partial_group, partial_len, &padded_partial, &padded_len);
+    if (padded_partial != NULL && padded_len > 0) {
+        size_t group_num = padded_len / 64;
+        for (size_t i = 0; i < group_num; i++) {
+            sm3_compress(iv, padded_partial + i * 64);
+        }
+        free(padded_partial);
+    }
+
+    // 步骤3：IV→哈希值
+    const char* hex_table = "0123456789abcdef";
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 4; j++) {
+            uint8_t byte = (iv[i] >> (24 - 8 * j)) & 0xff;
+            hash[i * 8 + 2 * j] = hex_table[byte >> 4];
+            hash[i * 8 + 2 * j + 1] = hex_table[byte & 0x0f];
+        }
+    }
+    hash[64] = '\0';
+
+    // 释放资源
+    free(block);
+    fclose(fp);
+    return 0;
+}
+
+// 6. 打印哈希值
+void sm3_print_hash(const char* hash) {
+    if (hash == NULL) {
+        printf("哈希值为空！\n");
+        return;
+    }
+    printf("SM3哈希值：%s\n", hash);
+}
